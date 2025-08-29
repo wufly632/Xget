@@ -2203,7 +2203,7 @@ WORKDIR /app
 
 ### Cloudflare Workers
 
-[![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/xixu-me/Xget)
+[![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/wufly632/Xget)
 
 部署后，你的 Xget 服务将在 `your-worker-name.your-subdomain.workers.dev` 上可用。
 
