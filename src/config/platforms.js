@@ -39,6 +39,7 @@ export const PLATFORMS = {
   arxiv: 'https://arxiv.org',
   fdroid: 'https://f-droid.org',
   places: 'https://places.googleapis.com',
+  maps: 'https://maps.googleapis.com',
   jenkins: 'https://updates.jenkins.io',
 
   // AI Inference Providers
