@@ -40,6 +40,7 @@ export const PLATFORMS = {
   fdroid: 'https://f-droid.org',
   'google-places': 'https://places.googleapis.com',
   'google-maps': 'https://maps.googleapis.com',
+  docker: 'https://download.docker.com',
   jenkins: 'https://updates.jenkins.io',
 
   // AI Inference Providers
