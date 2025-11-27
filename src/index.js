@@ -770,7 +770,6 @@ async function handleRequest(request, env, ctx) {
     }
 
     // Parse platform and path
-    let platform;
     let effectivePath = url.pathname;
 
     // Handle container registry paths specially
@@ -793,13 +792,21 @@ async function handleRequest(request, env, ctx) {
       return pathB.length - pathA.length;
     });
 
-    platform =
+    const platform =
       sortedPlatforms.find(key => {
         const expectedPrefix = `/${key.replace('-', '/')}/`;
         return effectivePath.startsWith(expectedPrefix);
       }) || effectivePath.split('/')[1];
 
     if (!platform || !config.PLATFORMS[platform]) {
+      const HOME_PAGE_URL = 'https://github.com/xixu-me/Xget';
+      return Response.redirect(HOME_PAGE_URL, 302);
+    }
+
+    // Check if the path only contains the platform prefix without any actual resource path
+    // For example: /gh, /npm, /pypi (should be /gh/user/repo, /npm/package, etc.)
+    const platformPath = `/${platform.replace(/-/g, '/')}`;
+    if (effectivePath === platformPath || effectivePath === `${platformPath}/`) {
       const HOME_PAGE_URL = 'https://github.com/xixu-me/Xget';
       return Response.redirect(HOME_PAGE_URL, 302);
     }
@@ -993,6 +1000,11 @@ async function handleRequest(request, env, ctx) {
       requestHeaders.set('User-Agent', 'Wget/1.21.3');
       requestHeaders.set('Origin', request.headers.get('Origin') || '*');
 
+      // Forward Authorization header if present (needed for authenticated resources)
+      if (authorization) {
+        requestHeaders.set('Authorization', authorization);
+      }
+
       // Handle range requests - but don't forward Range header if we need to cache full content
       const rangeHeader = request.headers.get('Range');
 
@@ -1044,29 +1056,61 @@ async function handleRequest(request, env, ctx) {
           // First, try the HEAD request
           response = await fetch(targetUrl, finalFetchOptions);
 
-          // If HEAD request succeeds but lacks Content-Length, do a GET request to get it
+          // If HEAD request succeeds but lacks Content-Length, try to get it efficiently
           if (response.ok && !response.headers.get('Content-Length')) {
-            const getResponse = await fetch(targetUrl, {
+            // Strategy 1: Try a Range request for the first byte to get Content-Range with total size
+            // This is much more efficient than downloading the entire file
+            const rangeHeaders = new Headers(requestHeaders);
+            rangeHeaders.set('Range', 'bytes=0-0');
+
+            const rangeResponse = await fetch(targetUrl, {
               ...finalFetchOptions,
-              method: 'GET'
+              method: 'GET',
+              headers: rangeHeaders
             });
 
-            if (getResponse.ok) {
-              // Create a new response with HEAD method but include Content-Length from GET
-              const headHeaders = new Headers(response.headers);
-              const contentLength = getResponse.headers.get('Content-Length');
+            let contentLength = null;
 
-              if (contentLength) {
-                headHeaders.set('Content-Length', contentLength);
-              } else {
-                // If still no Content-Length, calculate it from the response body
-                const arrayBuffer = await getResponse.arrayBuffer();
-                headHeaders.set('Content-Length', arrayBuffer.byteLength.toString());
+            // If server supports Range requests, extract size from Content-Range header
+            if (rangeResponse.status === 206) {
+              const contentRange = rangeResponse.headers.get('Content-Range');
+              // Content-Range format: "bytes 0-0/12345" where 12345 is the total size
+              if (contentRange) {
+                const match = contentRange.match(/bytes\s+\d+-\d+\/(\d+)/);
+                if (match && match[1]) {
+                  contentLength = match[1];
+                }
               }
+            } else if (rangeResponse.ok) {
+              // Server doesn't support Range requests, try to get Content-Length from GET response
+              contentLength = rangeResponse.headers.get('Content-Length');
+
+              // If still no Content-Length and response is small enough, calculate from body
+              if (!contentLength) {
+                const sizeLimit = 50 * 1024 * 1024; // 50MB limit for buffering
+                const contentLengthHint = rangeResponse.headers.get('Content-Length');
+
+                // Only buffer if we know it's small or we don't know the size
+                if (!contentLengthHint || parseInt(contentLengthHint) < sizeLimit) {
+                  try {
+                    const arrayBuffer = await rangeResponse.arrayBuffer();
+                    contentLength = arrayBuffer.byteLength.toString();
+                  } catch (error) {
+                    // If buffering fails (too large, timeout, etc.), skip it
+                    console.warn('Could not buffer response to get Content-Length:', error);
+                  }
+                }
+              }
+            }
+
+            // Create HEAD response with Content-Length if we got it
+            if (contentLength) {
+              const headHeaders = new Headers(response.headers);
+              headHeaders.set('Content-Length', contentLength);
 
               response = new Response(null, {
-                status: getResponse.status,
-                statusText: getResponse.statusText,
+                status: response.status,
+                statusText: response.statusText,
                 headers: headHeaders
               });
             }
@@ -1206,7 +1250,7 @@ async function handleRequest(request, env, ctx) {
     // Handle PyPI simple index URL rewriting
     if (platform === 'pypi' && response.headers.get('content-type')?.includes('text/html')) {
       const originalText = await response.text();
-      // Rewrite URLs in the response body to go through the Cloudflare Worker
+      // Rewrite URLs in the response body to go through the Cloudflare Workers
       // files.pythonhosted.org URLs should be rewritten to go through our pypi/files endpoint
       const rewrittenText = originalText.replace(
         /https:\/\/files\.pythonhosted\.org/g,
@@ -1389,7 +1433,7 @@ function addPerformanceHeaders(response, monitor) {
  * Cloudflare Workers. The fetch handler receives all incoming HTTP requests
  * and delegates processing to the handleRequest function.
  *
- * **Deployment:** This module is deployed as a Cloudflare Worker and handles
+ * **Deployment:** This module is deployed as a Cloudflare Workers and handles
  * requests at the edge for optimal performance and global distribution.
  *
  * @example
@@ -1403,7 +1447,7 @@ function addPerformanceHeaders(response, monitor) {
  */
 export default {
   /**
-   * Main entry point for the Cloudflare Worker fetch event.
+   * Main entry point for the Cloudflare Workers fetch event.
    *
    * This method is automatically invoked by the Cloudflare Workers runtime
    * for every incoming HTTP request. It delegates all request processing
